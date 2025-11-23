@@ -1,0 +1,19 @@
+{
+  "name": "mega-fun-obby",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "hytopia": "^0.14.3"
+  },
+  "optionalDependencies": {
+    "@hytopia.com/assets": "^0.4.2"
+  }
+}
