@@ -1,1 +1,4 @@
 node_modules
+
+# Hytopia SDK local development data
+dev/
