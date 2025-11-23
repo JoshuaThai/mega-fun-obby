@@ -30,6 +30,7 @@ import {
   PlayerEvent,
   EntityEvent,
   type Vector3Like,
+  Quaternion,
 } from 'hytopia';
 
 import worldMap from './assets/map.json';
@@ -78,6 +79,67 @@ startServer(world => {
    * can find documentation on how the event system works,
    * here: https://dev.hytopia.com/sdk-guides/events
    */
+  // Find all checkpoint blocks (orange concrete, ID 5) from the map
+  const ORANGE_CONCRETE_BLOCK_ID = 5;
+  const checkpointBlocks: Vector3Like[] = [];
+  
+  // Parse map to find all orange concrete blocks
+  const blocks = worldMap.blocks;
+  for (const [coord, blockId] of Object.entries(blocks)) {
+    if (blockId === ORANGE_CONCRETE_BLOCK_ID) {
+      const [x, y, z] = coord.split(',').map(Number);
+      checkpointBlocks.push({ x, y: y + 1, z }); // y + 1 to place player on top of block
+    }
+  }
+  
+  // Sort checkpoints by progression (order by z-coordinate, then x-coordinate)
+  // This determines the sequence of checkpoints
+  checkpointBlocks.sort((a, b) => {
+    if (Math.abs(a.z - b.z) > 0.5) {
+      return a.z - b.z; // Primary sort by z-coordinate
+    }
+    return a.x - b.x; // Secondary sort by x-coordinate
+  });
+  
+  // Helper function to find which checkpoint a position is closest to
+  const findCheckpointIndex = (position: Vector3Like): number => {
+    let closestIndex = 0;
+    let minDistance = Infinity;
+    
+    for (let i = 0; i < checkpointBlocks.length; i++) {
+      const checkpoint = checkpointBlocks[i];
+      const distance = Math.sqrt(
+        Math.pow(checkpoint.x - position.x, 2) +
+        Math.pow(checkpoint.z - position.z, 2)
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = i;
+      }
+    }
+    
+    return closestIndex;
+  };
+  
+  // Helper function to find which checkpoint block a position is at (within threshold)
+  const findCheckpointAtPosition = (position: Vector3Like, threshold: number = 1.5): number | null => {
+    for (let i = 0; i < checkpointBlocks.length; i++) {
+      const checkpoint = checkpointBlocks[i];
+      const distance = Math.sqrt(
+        Math.pow(checkpoint.x - position.x, 2) +
+        Math.pow(checkpoint.y - position.y, 2) +
+        Math.pow(checkpoint.z - position.z, 2)
+      );
+      
+      if (distance < threshold) {
+        return i;
+      }
+    }
+    
+    return null;
+  };
+
   world.on(PlayerEvent.JOINED_WORLD, async ({ player }) => {
     const defaultSpawnPosition: Vector3Like = { x: 0, y: 10, z: 0 };
     
@@ -95,12 +157,47 @@ startServer(world => {
       }
     }
     
+    // Find nearest checkpoint that isn't the starting checkpoint
+    let nearestCheckpoint: Vector3Like | null = null;
+    let minDistance = Infinity;
+    
+    for (const checkpoint of checkpointBlocks) {
+      // Skip if this is the starting checkpoint (within 2 blocks)
+      const distToSpawn = Math.sqrt(
+        Math.pow(checkpoint.x - defaultSpawnPosition.x, 2) +
+        Math.pow(checkpoint.z - defaultSpawnPosition.z, 2)
+      );
+      if (distToSpawn < 2) continue;
+      
+      // Calculate distance from spawn position to this checkpoint
+      const distance = Math.sqrt(
+        Math.pow(checkpoint.x - checkpointPosition.x, 2) +
+        Math.pow(checkpoint.z - checkpointPosition.z, 2)
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearestCheckpoint = checkpoint;
+      }
+    }
+    
+    // Calculate rotation to face nearest checkpoint
+    let spawnRotation: Quaternion | undefined;
+    if (nearestCheckpoint) {
+      const dx = nearestCheckpoint.x - checkpointPosition.x;
+      const dz = nearestCheckpoint.z - checkpointPosition.z;
+      // Calculate yaw angle (rotation around Y axis)
+      // -z is forward in Hytopia, so we use atan2(-dx, -dz)
+      const yaw = Math.atan2(-dx, -dz) * (180 / Math.PI); // Convert to degrees
+      spawnRotation = Quaternion.fromEuler(0, yaw, 0);
+    }
+    
     const playerEntity = new DefaultPlayerEntity({
       player,
       name: 'Player',
     });
   
-    playerEntity.spawn(world, checkpointPosition);
+    playerEntity.spawn(world, checkpointPosition, spawnRotation);
 
     // Ensure camera is attached to the player entity
     // (DefaultPlayerEntity should do this automatically, but explicitly setting it ensures it works)
@@ -116,21 +213,103 @@ startServer(world => {
     world.chatManager.sendPlayerMessage(player, 'Touch orange concrete blocks to set checkpoints!', 'FFA500');
     world.chatManager.sendPlayerMessage(player, 'Press \\ to enter or exit debug view.');
 
-    // Orange concrete block type id (from map.json)
-    const ORANGE_CONCRETE_BLOCK_ID = 3;
+    // Lava block type id (from map.json)
+    const LAVA_BLOCK_ID = 4;
 
     // Store current checkpoint position (will be updated when new checkpoint is set)
     let currentCheckpointPosition: Vector3Like = checkpointPosition;
+    
+    // Determine which checkpoint the player is currently on based on their saved position
+    let currentCheckpointIndex = findCheckpointIndex(checkpointPosition);
+    
+    // Ensure currentCheckpointIndex is valid (in case checkpoint was removed or changed)
+    if (currentCheckpointIndex >= checkpointBlocks.length) {
+      currentCheckpointIndex = Math.max(0, checkpointBlocks.length - 1);
+    }
+
+    // Helper function to respawn player at checkpoint
+    const respawnAtCheckpoint = () => {
+      // Find nearest checkpoint for rotation
+      let nearestCheckpoint: Vector3Like | null = null;
+      let minDistance = Infinity;
+      
+      for (const checkpoint of checkpointBlocks) {
+        const distToSpawn = Math.sqrt(
+          Math.pow(checkpoint.x - defaultSpawnPosition.x, 2) +
+          Math.pow(checkpoint.z - defaultSpawnPosition.z, 2)
+        );
+        if (distToSpawn < 2) continue;
+        
+        const distance = Math.sqrt(
+          Math.pow(checkpoint.x - currentCheckpointPosition.x, 2) +
+          Math.pow(checkpoint.z - currentCheckpointPosition.z, 2)
+        );
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestCheckpoint = checkpoint;
+        }
+      }
+      
+      // Calculate rotation to face nearest checkpoint
+      let respawnRotation: Quaternion | undefined;
+      if (nearestCheckpoint) {
+        const dx = nearestCheckpoint.x - currentCheckpointPosition.x;
+        const dz = nearestCheckpoint.z - currentCheckpointPosition.z;
+        const yaw = Math.atan2(-dx, -dz) * (180 / Math.PI);
+        respawnRotation = Quaternion.fromEuler(0, yaw, 0);
+      }
+      
+      // Respawn player at checkpoint
+      playerEntity.setPosition(currentCheckpointPosition);
+      if (respawnRotation) {
+        playerEntity.setRotation(respawnRotation);
+      }
+      playerEntity.setLinearVelocity({ x: 0, y: 0, z: 0 });
+    };
 
     // Set up checkpoint system - detect when player touches orange concrete
     playerEntity.on(EntityEvent.BLOCK_COLLISION, ({ blockType, started }) => {
       // Check if the collision is with orange concrete and collision just started
       if (blockType.id === ORANGE_CONCRETE_BLOCK_ID && started) {
-        // Save the player's current position as checkpoint
-        const newCheckpointPosition = playerEntity.position;
-        currentCheckpointPosition = newCheckpointPosition;
-        player.setPersistedData({ checkpointPosition: newCheckpointPosition });
-        world.chatManager.sendPlayerMessage(player, 'Checkpoint saved!', '00FF00');
+        const playerPosition = playerEntity.position;
+        const touchedCheckpointIndex = findCheckpointAtPosition(playerPosition);
+        
+        if (touchedCheckpointIndex === null) {
+          // Player is not close enough to any checkpoint block
+          return;
+        }
+        
+        // Check if this is the current checkpoint or the immediate next checkpoint
+        const isCurrentCheckpoint = touchedCheckpointIndex === currentCheckpointIndex;
+        const isNextCheckpoint = touchedCheckpointIndex === currentCheckpointIndex + 1;
+        
+        if (isCurrentCheckpoint) {
+          // Player is on their current checkpoint - allow saving to refresh it
+          const newCheckpointPosition = checkpointBlocks[touchedCheckpointIndex];
+          currentCheckpointPosition = newCheckpointPosition;
+          player.setPersistedData({ checkpointPosition: newCheckpointPosition });
+          world.chatManager.sendPlayerMessage(player, 'Checkpoint saved!', '00FF00');
+        } else if (isNextCheckpoint) {
+          // Player is on the next checkpoint - allow saving to progress
+          const newCheckpointPosition = checkpointBlocks[touchedCheckpointIndex];
+          currentCheckpointPosition = newCheckpointPosition;
+          currentCheckpointIndex = touchedCheckpointIndex;
+          player.setPersistedData({ checkpointPosition: newCheckpointPosition });
+          world.chatManager.sendPlayerMessage(player, 'Checkpoint saved!', '00FF00');
+        } else if (touchedCheckpointIndex < currentCheckpointIndex) {
+          // Player tried to save a checkpoint that comes before their current one
+          world.chatManager.sendPlayerMessage(player, 'You cannot go back to a previous checkpoint!', 'FF0000');
+        } else {
+          // Player tried to save a checkpoint that is not the immediate next one
+          world.chatManager.sendPlayerMessage(player, 'You must reach checkpoints in order!', 'FF0000');
+        }
+      }
+      
+      // Check if the collision is with lava and collision just started
+      if (blockType.id === LAVA_BLOCK_ID && started) {
+        world.chatManager.sendPlayerMessage(player, 'You touched lava! Respawning at checkpoint...', 'FF0000');
+        respawnAtCheckpoint();
       }
     });
 
@@ -141,11 +320,8 @@ startServer(world => {
     playerEntity.on(EntityEvent.UPDATE_POSITION, ({ position }) => {
       // Check if player has fallen too far below their checkpoint position
       if (position.y < currentCheckpointPosition.y - FALL_THRESHOLD) {
-        // Respawn the player at their last checkpoint
-        playerEntity.setPosition(currentCheckpointPosition);
-        // Reset velocity to prevent continued falling
-        playerEntity.setLinearVelocity({ x: 0, y: 0, z: 0 });
         world.chatManager.sendPlayerMessage(player, 'You fell off the map! Respawning at checkpoint...', 'FF0000');
+        respawnAtCheckpoint();
       }
     });
   });
