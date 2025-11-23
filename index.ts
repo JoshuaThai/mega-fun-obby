@@ -28,6 +28,8 @@ import {
   Audio,
   DefaultPlayerEntity,
   PlayerEvent,
+  EntityEvent,
+  type Vector3Like,
 } from 'hytopia';
 
 import worldMap from './assets/map.json';
@@ -76,13 +78,33 @@ startServer(world => {
    * can find documentation on how the event system works,
    * here: https://dev.hytopia.com/sdk-guides/events
    */
-  world.on(PlayerEvent.JOINED_WORLD, ({ player }) => {
+  world.on(PlayerEvent.JOINED_WORLD, async ({ player }) => {
+    const defaultSpawnPosition: Vector3Like = { x: 0, y: 10, z: 0 };
+    
+    // Load saved checkpoint position or use default spawn
+    const playerData = await player.getPersistedData();
+    let checkpointPosition: Vector3Like = defaultSpawnPosition;
+    
+    if (playerData && playerData.checkpointPosition) {
+      const savedCheckpoint = playerData.checkpointPosition as Vector3Like;
+      // Validate the saved checkpoint has valid coordinates
+      if (typeof savedCheckpoint.x === 'number' && 
+          typeof savedCheckpoint.y === 'number' && 
+          typeof savedCheckpoint.z === 'number') {
+        checkpointPosition = savedCheckpoint;
+      }
+    }
+    
     const playerEntity = new DefaultPlayerEntity({
       player,
       name: 'Player',
     });
   
-    playerEntity.spawn(world, { x: 0, y: 10, z: 0 });
+    playerEntity.spawn(world, checkpointPosition);
+
+    // Ensure camera is attached to the player entity
+    // (DefaultPlayerEntity should do this automatically, but explicitly setting it ensures it works)
+    player.camera.setAttachedToEntity(playerEntity);
 
     // Load our game UI for this player
     player.ui.load('ui/index.html');
@@ -91,8 +113,41 @@ startServer(world => {
     world.chatManager.sendPlayerMessage(player, 'Welcome to the game!', '00FF00');
     world.chatManager.sendPlayerMessage(player, 'Use WASD to move around & space to jump.');
     world.chatManager.sendPlayerMessage(player, 'Hold shift to sprint.');
-    world.chatManager.sendPlayerMessage(player, 'Random cosmetic items are enabled for testing!');
+    world.chatManager.sendPlayerMessage(player, 'Touch orange concrete blocks to set checkpoints!', 'FFA500');
     world.chatManager.sendPlayerMessage(player, 'Press \\ to enter or exit debug view.');
+
+    // Orange concrete block type id (from map.json)
+    const ORANGE_CONCRETE_BLOCK_ID = 3;
+
+    // Store current checkpoint position (will be updated when new checkpoint is set)
+    let currentCheckpointPosition: Vector3Like = checkpointPosition;
+
+    // Set up checkpoint system - detect when player touches orange concrete
+    playerEntity.on(EntityEvent.BLOCK_COLLISION, ({ blockType, started }) => {
+      // Check if the collision is with orange concrete and collision just started
+      if (blockType.id === ORANGE_CONCRETE_BLOCK_ID && started) {
+        // Save the player's current position as checkpoint
+        const newCheckpointPosition = playerEntity.position;
+        currentCheckpointPosition = newCheckpointPosition;
+        player.setPersistedData({ checkpointPosition: newCheckpointPosition });
+        world.chatManager.sendPlayerMessage(player, 'Checkpoint saved!', '00FF00');
+      }
+    });
+
+    // Set up fall detection and respawn system
+    // If player falls more than 50 blocks below their checkpoint, respawn them
+    const FALL_THRESHOLD = 50;
+    
+    playerEntity.on(EntityEvent.UPDATE_POSITION, ({ position }) => {
+      // Check if player has fallen too far below their checkpoint position
+      if (position.y < currentCheckpointPosition.y - FALL_THRESHOLD) {
+        // Respawn the player at their last checkpoint
+        playerEntity.setPosition(currentCheckpointPosition);
+        // Reset velocity to prevent continued falling
+        playerEntity.setLinearVelocity({ x: 0, y: 0, z: 0 });
+        world.chatManager.sendPlayerMessage(player, 'You fell off the map! Respawning at checkpoint...', 'FF0000');
+      }
+    });
   });
 
   /**

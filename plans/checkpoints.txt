@@ -1,0 +1,29 @@
+Checkpoint System Implementation
+Features:
+
+Checkpoint detection: When a player touches an orange concrete block (block ID 3), 
+their position is saved as a checkpoint.
+
+Persistent storage: Checkpoints are saved using player.setPersistedData() and persist 
+after the player leaves and rejoins.
+
+Checkpoint loading: On join, the game loads the saved checkpoint position. 
+If none exists, it uses the default spawn position { x: 0, y: 10, z: 0 }.
+Respawn at checkpoint: When a player falls more than 50 blocks below their checkpoint, 
+they respawn at their last saved checkpoint instead of the initial spawn.
+
+User feedback: Players receive messages when:
+They touch an orange concrete block: "Checkpoint saved!" (green)
+They fall and respawn: "You fell off the map! Respawning at checkpoint..." (red)
+They join: Instructions about checkpoints (orange)
+
+How it works:
+
+On join: Loads saved checkpoint from persisted data or uses default spawn
+
+On collision: When touching orange concrete, saves current position as checkpoint
+
+On fall: If falling too far, respawns at the last saved checkpoint
+
+The checkpoint system is integrated with the existing fall detection system, 
+so players respawn at their most recent checkpoint rather than the starting position.
