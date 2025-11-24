@@ -79,26 +79,41 @@ startServer(world => {
    * can find documentation on how the event system works,
    * here: https://dev.hytopia.com/sdk-guides/events
    */
-  // Find all checkpoint blocks (orange concrete, ID 5) from the map
-  const ORANGE_CONCRETE_BLOCK_ID = 5;
+  // Find all checkpoint blocks (orange concrete, ID 6) from the map
+  const ORANGE_CONCRETE_BLOCK_ID = 6;
   const checkpointBlocks: Vector3Like[] = [];
+  const checkpointBlockCoords: Vector3Like[] = []; // Store actual block coordinates
   
   // Parse map to find all orange concrete blocks
   const blocks = worldMap.blocks;
   for (const [coord, blockId] of Object.entries(blocks)) {
     if (blockId === ORANGE_CONCRETE_BLOCK_ID) {
       const [x, y, z] = coord.split(',').map(Number);
+      checkpointBlockCoords.push({ x, y, z }); // Store actual block coordinate
       checkpointBlocks.push({ x, y: y + 1, z }); // y + 1 to place player on top of block
     }
   }
   
   // Sort checkpoints by progression (order by z-coordinate, then x-coordinate)
   // This determines the sequence of checkpoints
-  checkpointBlocks.sort((a, b) => {
-    if (Math.abs(a.z - b.z) > 0.5) {
-      return a.z - b.z; // Primary sort by z-coordinate
+  // Sort both arrays together to keep them in sync
+  const checkpointPairs = checkpointBlockCoords.map((blockCoord, i) => ({
+    blockCoord,
+    spawnPos: checkpointBlocks[i]
+  }));
+  checkpointPairs.sort((a, b) => {
+    if (Math.abs(a.blockCoord.z - b.blockCoord.z) > 0.5) {
+      return a.blockCoord.z - b.blockCoord.z; // Primary sort by z-coordinate
     }
-    return a.x - b.x; // Secondary sort by x-coordinate
+    return a.blockCoord.x - b.blockCoord.x; // Secondary sort by x-coordinate
+  });
+  
+  // Rebuild arrays in sorted order
+  checkpointBlockCoords.length = 0;
+  checkpointBlocks.length = 0;
+  checkpointPairs.forEach(pair => {
+    checkpointBlockCoords.push(pair.blockCoord);
+    checkpointBlocks.push(pair.spawnPos);
   });
   
   // Helper function to find which checkpoint a position is closest to
@@ -122,18 +137,22 @@ startServer(world => {
     return closestIndex;
   };
   
-  // Helper function to find which checkpoint block a position is at (within threshold)
-  const findCheckpointAtPosition = (position: Vector3Like, threshold: number = 1.5): number | null => {
-    for (let i = 0; i < checkpointBlocks.length; i++) {
-      const checkpoint = checkpointBlocks[i];
-      const distance = Math.sqrt(
-        Math.pow(checkpoint.x - position.x, 2) +
-        Math.pow(checkpoint.y - position.y, 2) +
-        Math.pow(checkpoint.z - position.z, 2)
-      );
+  // Helper function to find which checkpoint block a position is at
+  // Checks if player is actually standing on top of the checkpoint block
+  const findCheckpointAtPosition = (position: Vector3Like): number | null => {
+    for (let i = 0; i < checkpointBlockCoords.length; i++) {
+      const blockCoord = checkpointBlockCoords[i];
+      // Check if player's x and z coordinates are within the block (0.5 block radius from center)
+      const dx = Math.abs(position.x - (blockCoord.x + 0.5));
+      const dz = Math.abs(position.z - (blockCoord.z + 0.5));
       
-      if (distance < threshold) {
-        return i;
+      // Player must be within the block's horizontal bounds
+      if (dx < 0.5 && dz < 0.5) {
+        // Check if player is on top of or slightly above the block
+        const blockTop = blockCoord.y + 1;
+        if (position.y >= blockCoord.y && position.y < blockTop + 2) {
+          return i;
+        }
       }
     }
     
@@ -214,7 +233,7 @@ startServer(world => {
     world.chatManager.sendPlayerMessage(player, 'Press \\ to enter or exit debug view.');
 
     // Lava block type id (from map.json)
-    const LAVA_BLOCK_ID = 4;
+    const LAVA_BLOCK_ID = 5;
 
     // Store current checkpoint position (will be updated when new checkpoint is set)
     let currentCheckpointPosition: Vector3Like = checkpointPosition;
