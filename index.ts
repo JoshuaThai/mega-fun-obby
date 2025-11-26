@@ -83,6 +83,7 @@ startServer(world => {
   const ORANGE_CONCRETE_BLOCK_ID = 6;
   const checkpointBlocks: Vector3Like[] = [];
   const checkpointBlockCoords: Vector3Like[] = []; // Store actual block coordinates
+  const checkpointCoordToIndex: Map<string, number> = new Map(); // Map block coordinates to checkpoint index
   
   // Parse map to find all orange concrete blocks
   const blocks = worldMap.blocks;
@@ -99,7 +100,8 @@ startServer(world => {
   // Sort both arrays together to keep them in sync
   const checkpointPairs = checkpointBlockCoords.map((blockCoord, i) => ({
     blockCoord,
-    spawnPos: checkpointBlocks[i]
+    spawnPos: checkpointBlocks[i],
+    coord: `${blockCoord.x},${blockCoord.y},${blockCoord.z}`
   }));
   checkpointPairs.sort((a, b) => {
     if (Math.abs(a.blockCoord.z - b.blockCoord.z) > 0.5) {
@@ -108,12 +110,13 @@ startServer(world => {
     return a.blockCoord.x - b.blockCoord.x; // Secondary sort by x-coordinate
   });
   
-  // Rebuild arrays in sorted order
+  // Rebuild arrays in sorted order and create coordinate lookup map
   checkpointBlockCoords.length = 0;
   checkpointBlocks.length = 0;
-  checkpointPairs.forEach(pair => {
+  checkpointPairs.forEach((pair, index) => {
     checkpointBlockCoords.push(pair.blockCoord);
     checkpointBlocks.push(pair.spawnPos);
+    checkpointCoordToIndex.set(pair.coord, index); // Map coordinate to sorted index
   });
   
   // Helper function to find which checkpoint a position is closest to
@@ -160,44 +163,58 @@ startServer(world => {
   };
 
   world.on(PlayerEvent.JOINED_WORLD, async ({ player }) => {
-    const defaultSpawnPosition: Vector3Like = { x: 0, y: 10, z: 0 };
-    
-    // Load saved checkpoint position or use default spawn
+    // Load saved checkpoint position or use first checkpoint
     const playerData = await player.getPersistedData();
-    let checkpointPosition: Vector3Like = defaultSpawnPosition;
+    let checkpointPosition: Vector3Like;
+    let currentCheckpointIndex: number;
     
-    if (playerData && playerData.checkpointPosition) {
+    if (playerData && playerData.checkpointPosition && checkpointBlocks.length > 0) {
       const savedCheckpoint = playerData.checkpointPosition as Vector3Like;
       // Validate the saved checkpoint has valid coordinates
       if (typeof savedCheckpoint.x === 'number' && 
           typeof savedCheckpoint.y === 'number' && 
           typeof savedCheckpoint.z === 'number') {
-        checkpointPosition = savedCheckpoint;
+        // Find which checkpoint this position corresponds to
+        const savedIndex = findCheckpointIndex(savedCheckpoint);
+        // Validate the saved position is actually close to a checkpoint
+        const savedCheckpointPos = checkpointBlocks[savedIndex];
+        const distance = Math.sqrt(
+          Math.pow(savedCheckpoint.x - savedCheckpointPos.x, 2) +
+          Math.pow(savedCheckpoint.z - savedCheckpointPos.z, 2)
+        );
+        // If saved position is within 5 blocks of a checkpoint, use it
+        if (distance < 5 && savedIndex < checkpointBlocks.length) {
+          checkpointPosition = savedCheckpointPos; // Use the actual checkpoint position
+          currentCheckpointIndex = savedIndex;
+        } else {
+          // Invalid saved position, use first checkpoint
+          checkpointPosition = checkpointBlocks[0];
+          currentCheckpointIndex = 0;
+        }
+      } else {
+        // Invalid saved data, use first checkpoint
+        checkpointPosition = checkpointBlocks[0];
+        currentCheckpointIndex = 0;
+      }
+    } else {
+      // No saved checkpoint, use first checkpoint
+      if (checkpointBlocks.length > 0) {
+        checkpointPosition = checkpointBlocks[0];
+        currentCheckpointIndex = 0;
+      } else {
+        // Fallback if no checkpoints exist
+        checkpointPosition = { x: 0, y: 10, z: 0 };
+        currentCheckpointIndex = 0;
       }
     }
     
-    // Find nearest checkpoint that isn't the starting checkpoint
+    // Find next checkpoint for rotation (if not at last checkpoint)
     let nearestCheckpoint: Vector3Like | null = null;
-    let minDistance = Infinity;
-    
-    for (const checkpoint of checkpointBlocks) {
-      // Skip if this is the starting checkpoint (within 2 blocks)
-      const distToSpawn = Math.sqrt(
-        Math.pow(checkpoint.x - defaultSpawnPosition.x, 2) +
-        Math.pow(checkpoint.z - defaultSpawnPosition.z, 2)
-      );
-      if (distToSpawn < 2) continue;
-      
-      // Calculate distance from spawn position to this checkpoint
-      const distance = Math.sqrt(
-        Math.pow(checkpoint.x - checkpointPosition.x, 2) +
-        Math.pow(checkpoint.z - checkpointPosition.z, 2)
-      );
-      
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearestCheckpoint = checkpoint;
-      }
+    if (currentCheckpointIndex < checkpointBlocks.length - 1) {
+      nearestCheckpoint = checkpointBlocks[currentCheckpointIndex + 1];
+    } else if (currentCheckpointIndex > 0) {
+      // If at last checkpoint, face backwards
+      nearestCheckpoint = checkpointBlocks[currentCheckpointIndex - 1];
     }
     
     // Calculate rotation to face nearest checkpoint
@@ -237,37 +254,16 @@ startServer(world => {
 
     // Store current checkpoint position (will be updated when new checkpoint is set)
     let currentCheckpointPosition: Vector3Like = checkpointPosition;
-    
-    // Determine which checkpoint the player is currently on based on their saved position
-    let currentCheckpointIndex = findCheckpointIndex(checkpointPosition);
-    
-    // Ensure currentCheckpointIndex is valid (in case checkpoint was removed or changed)
-    if (currentCheckpointIndex >= checkpointBlocks.length) {
-      currentCheckpointIndex = Math.max(0, checkpointBlocks.length - 1);
-    }
 
     // Helper function to respawn player at checkpoint
     const respawnAtCheckpoint = () => {
-      // Find nearest checkpoint for rotation
+      // Find next checkpoint for rotation (if not at last checkpoint)
       let nearestCheckpoint: Vector3Like | null = null;
-      let minDistance = Infinity;
-      
-      for (const checkpoint of checkpointBlocks) {
-        const distToSpawn = Math.sqrt(
-          Math.pow(checkpoint.x - defaultSpawnPosition.x, 2) +
-          Math.pow(checkpoint.z - defaultSpawnPosition.z, 2)
-        );
-        if (distToSpawn < 2) continue;
-        
-        const distance = Math.sqrt(
-          Math.pow(checkpoint.x - currentCheckpointPosition.x, 2) +
-          Math.pow(checkpoint.z - currentCheckpointPosition.z, 2)
-        );
-        
-        if (distance < minDistance) {
-          minDistance = distance;
-          nearestCheckpoint = checkpoint;
-        }
+      if (currentCheckpointIndex < checkpointBlocks.length - 1) {
+        nearestCheckpoint = checkpointBlocks[currentCheckpointIndex + 1];
+      } else if (currentCheckpointIndex > 0) {
+        // If at last checkpoint, face backwards
+        nearestCheckpoint = checkpointBlocks[currentCheckpointIndex - 1];
       }
       
       // Calculate rotation to face nearest checkpoint
@@ -292,7 +288,25 @@ startServer(world => {
       // Check if the collision is with orange concrete and collision just started
       if (blockType.id === ORANGE_CONCRETE_BLOCK_ID && started) {
         const playerPosition = playerEntity.position;
-        const touchedCheckpointIndex = findCheckpointAtPosition(playerPosition);
+        
+        // Find the nearest checkpoint block to the player
+        let touchedCheckpointIndex: number | null = null;
+        let minDistance = Infinity;
+        
+        for (let i = 0; i < checkpointBlockCoords.length; i++) {
+          const blockCoord = checkpointBlockCoords[i];
+          // Calculate distance from player to checkpoint block center
+          const distance = Math.sqrt(
+            Math.pow(playerPosition.x - (blockCoord.x + 0.5), 2) +
+            Math.pow(playerPosition.z - (blockCoord.z + 0.5), 2)
+          );
+          
+          // If player is within 1.5 blocks of the checkpoint block center, they're touching it
+          if (distance < 1.5 && distance < minDistance) {
+            minDistance = distance;
+            touchedCheckpointIndex = i;
+          }
+        }
         
         if (touchedCheckpointIndex === null) {
           // Player is not close enough to any checkpoint block
