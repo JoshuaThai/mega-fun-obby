@@ -85,13 +85,20 @@ startServer(world => {
   const checkpointBlockCoords: Vector3Like[] = []; // Store actual block coordinates
   const checkpointCoordToIndex: Map<string, number> = new Map(); // Map block coordinates to checkpoint index
   
-  // Parse map to find all orange concrete blocks
+  // Find all yellow arrow blocks (ID 7) from the map for conveyor belt effect
+  const YELLOW_ARROW_BLOCK_ID = 7;
+  const yellowArrowBlocks: Vector3Like[] = []; // Store yellow arrow block coordinates
+  
+  // Parse map to find all orange concrete blocks and yellow arrow blocks
   const blocks = worldMap.blocks;
   for (const [coord, blockId] of Object.entries(blocks)) {
     if (blockId === ORANGE_CONCRETE_BLOCK_ID) {
       const [x, y, z] = coord.split(',').map(Number);
       checkpointBlockCoords.push({ x, y, z }); // Store actual block coordinate
       checkpointBlocks.push({ x, y: y + 1, z }); // y + 1 to place player on top of block
+    } else if (blockId === YELLOW_ARROW_BLOCK_ID) {
+      const [x, y, z] = coord.split(',').map(Number);
+      yellowArrowBlocks.push({ x, y, z }); // Store yellow arrow block coordinate
     }
   }
   
@@ -355,6 +362,53 @@ startServer(world => {
       if (position.y < currentCheckpointPosition.y - FALL_THRESHOLD) {
         world.chatManager.sendPlayerMessage(player, 'You fell off the map! Respawning at checkpoint...', 'FF0000');
         respawnAtCheckpoint();
+      }
+      
+      // Check if player is on a yellow arrow block (conveyor belt)
+      let isOnConveyorBelt = false;
+      let conveyorDirection: Vector3Like | null = null;
+      
+      for (const arrowBlock of yellowArrowBlocks) {
+        // Check if player is on top of this arrow block
+        const dx = Math.abs(position.x - (arrowBlock.x + 0.5));
+        const dz = Math.abs(position.z - (arrowBlock.z + 0.5));
+        const dy = position.y - arrowBlock.y;
+        
+        // Player must be within the block's horizontal bounds and on top of it
+        if (dx < 0.6 && dz < 0.6 && dy >= 0.5 && dy < 2.5) {
+          isOnConveyorBelt = true;
+          // Arrow points in +Z direction (forward), so conveyor pushes in that direction
+          conveyorDirection = { x: 0, y: 0, z: 1 };
+          break;
+        }
+      }
+      
+      // Apply conveyor belt effect
+      if (isOnConveyorBelt && conveyorDirection) {
+        const velocity = playerEntity.linearVelocity;
+        
+        // Conveyor belt speed (moderate force)
+        const conveyorSpeed = 2.0;
+        
+        // Apply force in the conveyor direction
+        const forceX = conveyorDirection.x * conveyorSpeed;
+        const forceZ = conveyorDirection.z * conveyorSpeed;
+        
+        // Apply the conveyor force
+        playerEntity.applyImpulse({ x: forceX * 0.1, y: 0, z: forceZ * 0.1 });
+        
+        // Apply friction when walking against the conveyor direction
+        // Calculate velocity component against the conveyor
+        const velocityAgainstConveyor = velocity.x * -conveyorDirection.x + velocity.z * -conveyorDirection.z;
+        
+        if (velocityAgainstConveyor > 0.1) {
+          // Player is walking against the conveyor - apply friction
+          const frictionStrength = 0.4; // Moderate friction
+          const frictionX = -velocity.x * frictionStrength * 0.1;
+          const frictionZ = -velocity.z * frictionStrength * 0.1;
+          
+          playerEntity.applyImpulse({ x: frictionX, y: 0, z: frictionZ });
+        }
       }
     });
   });
