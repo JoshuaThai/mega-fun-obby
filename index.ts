@@ -261,6 +261,37 @@ startServer(world => {
 
     // Store current checkpoint position (will be updated when new checkpoint is set)
     let currentCheckpointPosition: Vector3Like = checkpointPosition;
+    
+    // Function to update progress UI
+    const updateProgressUI = () => {
+      const totalStages = checkpointBlocks.length;
+      // Stage number: current checkpoint index + 1 (starts at 1)
+      const currentStage = currentCheckpointIndex + 1;
+      
+      // Percentage: calculate based on progress from first checkpoint (0%) to last checkpoint (100%)
+      // If there's only 1 checkpoint, you're at 100%
+      let percentage = 0;
+      if (totalStages === 1) {
+        percentage = 100;
+      } else if (totalStages > 1) {
+        // Progress from checkpoint 0 (0%) to last checkpoint (100%)
+        percentage = (currentCheckpointIndex / (totalStages - 1)) * 100;
+      }
+      
+      // Ensure percentage doesn't exceed 100
+      percentage = Math.min(100, Math.max(0, percentage));
+      
+      player.ui.sendData({
+        type: 'progress-update',
+        stage: currentStage,
+        percentage: percentage
+      });
+    };
+    
+    // Send initial progress after UI is loaded (delay to ensure UI is ready)
+    setTimeout(() => {
+      updateProgressUI();
+    }, 500);
 
     // Helper function to respawn player at checkpoint
     const respawnAtCheckpoint = () => {
@@ -330,6 +361,8 @@ startServer(world => {
           currentCheckpointPosition = newCheckpointPosition;
           player.setPersistedData({ checkpointPosition: newCheckpointPosition });
           world.chatManager.sendPlayerMessage(player, 'Checkpoint saved!', '00FF00');
+          // Update UI immediately
+          updateProgressUI();
         } else if (isNextCheckpoint) {
           // Player is on the next checkpoint - allow saving to progress
           const newCheckpointPosition = checkpointBlocks[touchedCheckpointIndex];
@@ -337,6 +370,8 @@ startServer(world => {
           currentCheckpointIndex = touchedCheckpointIndex;
           player.setPersistedData({ checkpointPosition: newCheckpointPosition });
           world.chatManager.sendPlayerMessage(player, 'Checkpoint saved!', '00FF00');
+          // Update UI immediately after index is updated
+          updateProgressUI();
         } else if (touchedCheckpointIndex < currentCheckpointIndex) {
           // Player tried to save a checkpoint that comes before their current one
           world.chatManager.sendPlayerMessage(player, 'You cannot go back to a previous checkpoint!', 'FF0000');
